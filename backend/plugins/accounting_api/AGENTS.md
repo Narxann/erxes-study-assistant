@@ -1,0 +1,219 @@
+# `accounting_api` Plugin Guide
+
+## Identity
+
+- **Plugin:** `accounting`
+- **Project:** `accounting_api`
+- **Layer:** `Backend API`
+- **Path:** `backend/plugins/accounting_api`
+- **Last synchronized:** `2026-10-15`
+
+## Scope
+
+### Owns
+
+- Tenant-scoped accounting APIs for accounts, transactions, journals, reports, permissions, tax rows, inventory accounting, and fixed asset accounting.
+- Fund and debt currency rate adjustment persistence, calculation, validation, transaction execution, and subscriptions.
+- Temporary account closing adjustment calculation, tax impact persistence, and transaction execution.
+
+### Does not own
+
+- Core contacts, branches, departments, products, team members, and organization settings; consume them only through public platform contracts.
+- Frontend UI state, routes, forms, or presentation.
+- Other plugins' data models or implementation details.
+
+## Current Capabilities
+
+- Prints the federated accounting SDL without starting a server via `schema:print`; `gateway:schema:compose` includes this subgraph in the schema used by accounting UI codegen.
+- Creates, updates, removes, links, prints, and reports accounting transactions across main, cash, bank, receivable, payable, tax, inventory, fixed asset, and exchange-difference journals.
+- Exports accounting transaction detail rows through the platform import/export worker using transaction, account, journal, date, status, currency, branch, department, customer, and selected-id filters, with startup-safe capability metadata for Core discovery.
+- Permission metadata exposes VAT and CTAX row access through one `taxRow` module, exposes inventory/fixed-asset/fund-rate/debt-rate/closing adjustments as separate modules, and gates transaction reads/mutations by source journal while allowing generated follow journals, including `exchangeDiff`, through the source journal's permission.
+- Permission metadata exposes safe remainder read, manage, remove, and system-count visibility actions; users without count visibility see safe remainder item system counts as zero and cannot apply difference filters.
+- Fixed asset income transaction details create or update acquisition-backed fixed asset records from detail category, code, name, account, quantity, unit cost, and category depreciation defaults; multiple income details with the same acquisition code reuse one fixed asset and store the supplied acquisition quantity and cost.
+- Fixed asset categories store default annual depreciation percentages; fixed asset income copies the category's annual rate onto the generated fixed asset, and straight-line depreciation turns the annual percentage into monthly depreciation prorated by each month's day count.
+- Fixed asset income accepts unit accumulated depreciation as `details[].followInfos.preDeprecation`; it creates or updates only the transaction-linked `fxaDepIn` credit follow transaction, without creating fixed asset adjustment records.
+- Fixed asset owner records in `fxa_owner_records` are optional responsible-user/serial allocation ledger rows for income, disposal, sale, move details, and direct owner-record operations; `action: "received"` increases an owner balance and `action: "handedOver"` decreases it, transaction-level `followInfos.ownerId` is used as a fallback when no explicit owner rows are sent, while financial quantity, cost, branch/department movement, and depreciation remain driven by transaction details.
+- Provides `fxaOwnerRecords` and `fxaOwnerRecordsCount`, which list owner records with fixed asset, category-derived filtering, owner, action, status, created-date, and optional `balanceOnly` aggregate rows for selection sheets.
+- Fixed asset out, sale, move, and move-in journals derive quantity and branch/department movement from transaction details; internal moves keep the same fixed asset id, use the generated `fxaMoveIn` transaction for the destination branch and/or department, and generate accumulated-depreciation transfer follows as `fxaDepOut`/`fxaDepIn` when the move has prior depreciation.
+- Fixed asset income, disposal, sale, and movement details use `details[].followInfos.preDeprecation` for unit accumulated depreciation. Disposal/movement follows multiply it by detail count for their total amount and retain it as unit price; explicit zero is authoritative and negative or non-finite disposal inputs are rejected. No duplicate detail field or root summary array is consumed.
+- Provides `fixedAssetLocationRemainder`, which returns fixed asset quantity at a branch/department/date location from business-active fixed asset transaction detail movements, excluding the edited transaction's entire parent workflow when requested.
+- Provides `fixedAssetLocationRemainders`, which lists positive fixed asset quantities grouped by fixed asset, branch, and department with fixed asset, category, location, date, and search filters using the same transaction movement aggregation helper as `fixedAssetLocationRemainder`.
+- Fixed asset adjustment depreciation calculates straight-line, sum-of-years-digits, double-declining-balance, and declining-balance methods by day from transaction detail movements, caches period-end rows in `adjust_fxa_details`, allocates depreciation by active branch/department quantity while ignoring responsible-user allocation, and creates accounting transactions under the `fxaDep` journal.
+- Stores related debit/credit account codes without nested subdocument ids, normalizes empty related-account overrides before transaction persistence, and recalculates related codes from all transactions sharing the same `ptrId`.
+- Provides account, account category, permission, tax row, inventory, fixed asset, and journal report GraphQL contracts.
+- Provides safe remainder GraphQL list, detail, item list/count, create, edit, remove, recalculate, submit, cancel, transaction-run, transaction-undo, item edit, item bulk edit, and item remove contracts guarded by safe remainder permissions.
+- Safe remainder creation uses the selected product category, while recalculation filters products only by that remainder's existing item product ids, including imports outside the category; it stores each item's current total inventory cost, preserves counted zero values, and defaults non-explicit counted total cost from the refreshed quantity and value.
+- Safe remainder bulk import supports deterministic `skip`, `last`, and `add` duplicate rules; `skip` never overwrites an existing census row, `add` sums duplicate counts and explicit total costs, and imported products are recalculated immediately even when they fall outside the original category.
+- Generates journal report transaction/detail filters, source transaction-kind to current journal filters, grouping keys, date buckets, line records, shared drill-down rows for every report base unless explicitly disabled, and account/customer/product/fixed-asset/user/content enrichment from shared `ReportBase` definitions; filters support pointer, customer/company tags, product category/code/name, fixed-asset category/code/name, and created/modified/assigned users, account enrichment includes currency metadata, product metadata enrichment is fetched from core in batches of at most 1000 ids, and inventory adjustment kind `28` maps only to the cost-only `invJustify` journal.
+- Calculates fund rate adjustments for cash/bank foreign-currency balances by day, validates that daily foreign-currency balances do not go negative, groups final balances by account/branch/department, stores calculated details, and runs linked `exchangeDiff` transactions after calculation.
+- Calculates debt rate adjustments for receivable/payable balances by day, validates active accounts on debit-side balances and passive accounts on credit-side balances, groups final balances by account/customer/branch/department, stores calculated details, and runs linked `exchangeDiff` transactions after calculation.
+- Calculates temporary account closings from the previous completed/published closing or first temporary-account transaction through the selected date, groups final balances by account/branch/department, validates active accounts on debit balances and passive accounts on credit balances, stores editable row tax percentages, and runs linked closing transactions after calculation.
+- Publishes fund and debt adjustment subscription updates after calculation so detail screens can refresh without manual reloads.
+- Currency transactions compare custom rates with the active exchange rate, create exchange-difference follow transactions only when rates differ, and fail clearly when the active rate is missing.
+- Exposes inventory cost and last completed inventory income price helpers used by accounting transaction forms; current cost starts from the latest published inventory adjustment and applies business-active inventory movements strictly after that adjustment date.
+- Inventory income transaction details persist total line weight so additional expenses can be allocated by amount, count, or weight.
+- Inventory income and internal-movement income can split a received product into another product by detail-level `followInfos.invSplit`; saving creates linked `invOut` and `invIncome` follow transactions that preserve total cost while converting quantity and unit price by the ratio. The split pair shares its own pointer, separate from the source transaction pointer, and contains only enabled split details.
+- Deal movement sync configs create or update `invMove` transactions from checked deal product rows when a deal enters the configured stage; product/deal branch and department can be applied to either the movement source or destination, the other side uses configured default source/destination locations, and movement amounts use active inventory cost instead of deal sale price.
+- The `invJustify` journal adjusts inventory cost without changing quantity; its selectable debit side increases cost, its credit side decreases cost, and changing side on an existing transaction reverses the prior inventory effect before applying the new direction.
+- Inventory out and internal movement handlers replace submitted unit price and amount with current active inventory cost before saving; inventory sale keeps its editable sale price only on the sale transaction while generated cost-of-goods and inventory follow transactions use active cost.
+- Deal and POS order sale sync preserves normal sale journal creation and validation while skipping payment and receivable rows with missing account configuration. Actual paid amounts reduce the unpaid remainder even when their accounting rows are skipped, so missing payment accounts do not produce replacement receivables; the sale workflow may remain unbalanced.
+- Recalculates inventory adjustment outgoing costs by product, account, and effective branch/department location using detail-level branch/department before falling back to transaction root location, caches daily cost state, and keeps related main, receivable, and payable debit journal amounts aligned while preserving explicit cash/bank debit amounts. Generated split `invOut` transactions identified by both `originId` and `originType: invSplitOut` retain their transferred unit price and amount; adjustment cache consumes their stored total cost instead of repricing them.
+
+## Architecture
+
+| Area                | Path                                                         | Responsibility                                                                                                          |
+| ------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Schema export | `scripts/print-subgraph-schema.ts` | Shared Nx target default exports federated SDL to ignored `generated/schema.graphql` for gateway composition. |
+| Runtime             | `src/main.ts`                                                | Starts the accounting API plugin service.                                                                               |
+| Import/export       | `src/meta/import-export`                                     | Registers accounting import and transaction export types, headers, and row producers.                                   |
+| Apollo integration  | `src/apollo`                                                 | Registers accounting schema, resolvers, subscriptions, and federation wiring.                                           |
+| Models              | `src/connectionResolvers.ts`                                 | Generates tenant-scoped Mongoose models for accounting-owned collections.                                               |
+| Accounting domain   | `src/modules/accounting`                                     | Owns accounting schemas, models, GraphQL resolvers, journal utilities, and routes.                                      |
+| Inventory splitting | `src/modules/accounting/utils/invSplit.ts`                   | Normalizes split inputs and synchronizes cost-neutral `invOut`/`invIncome` follow transactions.                         |
+| Cost adjustment     | `src/modules/accounting/utils/invJustify.ts`                 | Owns inventory cost-adjustment save, side validation, inventory synchronization, and removal behavior.                  |
+| Safe remainders     | `src/modules/inventories`                                    | Owns inventory count snapshots, typed item transaction metadata, bulk import updates, and generated transactions.       |
+| Census calculation  | `src/modules/inventories/utils/safeRemainderTransactions.ts` | Purely calculates income, out, sale, and remaining cost-adjustment details from counted quantity and target value.      |
+| Journal reports     | `src/modules/accounting/utils/journalReports`                | Builds shared filters, aggregation groups, period splits, and display enrichment for journal reports.                   |
+| Report bases        | `src/modules/accounting/utils/journalReports/strategies`     | Groups report base definitions by main, fund, debt, inventory, and fixed asset report families.                         |
+| Report details      | `src/modules/accounting/utils/journalReports/details`        | Owns report-specific detail row lookups such as account statement more rows.                                            |
+| Rate adjustments    | `src/modules/accounting/utils/adjust*Rates.ts`               | Owns fund/debt daily validation, grouping, calculation, and transaction execution.                                      |
+| Closing adjustment  | `src/modules/accounting/utils/adjustClosings.ts`             | Owns temporary account closing calculation, tax impact calculation, and transaction execution.                          |
+| Fixed assets        | `src/modules/fixedAssets`                                    | Owns fixed asset categories, acquisition-backed fixed assets, optional owner-record ledger rows, and adjustment models. |
+
+## Contracts
+
+### Provides
+
+- Accounting GraphQL schema and resolvers from `src/modules/accounting/graphql`.
+- Import/export metadata for `accounting:account.transactions`, including transaction export headers and data batches.
+- Fund rate GraphQL contracts: `adjustFundRates`, `adjustFundRateDetail`, `adjustFundRateAdd`, `adjustFundRateChange`, `adjustFundRateCalculate`, `adjustFundRateDoTransaction`, `adjustFundRateRun`, `adjustFundRateRemove`, and `accountingAdjustFundRateChanged(adjustId: String!)`.
+- Debt rate GraphQL contracts: `adjustDebtRates`, `adjustDebtRateDetail`, `adjustDebtRatesAdd`, `adjustDebtRatesEdit`, `adjustDebtRateCalculate`, `adjustDebtRateDoTransaction`, `adjustDebtRatesRemove`, and `accountingAdjustDebtRateChanged(adjustId: String!)`.
+- Closing adjustment GraphQL contracts: `adjustClosings`, `adjustClosingsCount`, `adjustClosingDetail`, `adjustClosingEntriesCount`, `adjustClosingAdd`, `adjustClosingEdit`, `adjustClosingCalculate`, `adjustClosingDoTransaction`, `adjustClosingRun`, `adjustClosingPublish`, `adjustClosingCancel`, and `adjustClosingRemove`.
+- Adjustment detail fields include account/customer/branch/department grouping metadata, `mainBalance`, `currencyBalance`, `diff`, linked transaction ids, and validation state fields `beginDate`, `successDate`, `checkedAt`, `error`, and `warning`.
+- GraphQL query `getAccLastIncomePrice(productIds: [String!]!): [AccountingLastIncomePrice!]!` returns `{ productId, unitPrice }` rows; `getAccCurrentCost` returns `[AccCurrentCost!]!` rows with product id, remainder, total cost, and unit cost instead of a JSON dictionary.
+- Account `extra` and safe remainder item `trInfo` outputs have explicit object SDL types; corresponding mutation inputs remain JSON for compatibility with existing write paths.
+- `schema:print` opts into the shared printer in `nx.json` and writes ignored `generated/schema.graphql`. `gateway:schema:compose` consumes it and generates the schema used by frontend codegen.
+- GraphQL query `fixedAssetLocationRemainder(fixedAssetId, branchId, departmentId, date, excludeTransactionId)`, returning the transaction-history quantity for one fixed asset at one branch/department location.
+- Transaction journal enum accepts `invJustify`, with dedicated read, manage, and remove permission actions; `side: "dt"` means cost increase and `side: "ct"` means cost decrease.
+- GraphQL query `fixedAssetLocationRemainders(searchValue, fixedAssetId, categoryId, branchId, departmentId, date, limit)`, returning positive fixed asset quantities grouped by fixed asset, branch, and department.
+- Permission actions `readSafeRemainders`, `manageSafeRemainders`, `removeSafeRemainders`, and `viewSafeRemainderItemCounts` under the `safeRemainder` module.
+- Safe remainder GraphQL fields expose `costIncreaseRule`, `costDecreaseRule`, `costIncreaseTrId`, and `costDecreaseTrId`; item `trInfo` carries active/target total cost, explicit-cost state, last income price, sale flag, and sale price metadata.
+- Fixed asset category GraphQL contracts expose `defaultAnnualDepreciationRate` and `defaultTaxAnnualDepreciationRate`; fixed asset contracts expose `annualDepreciationRate` and `taxAnnualDepreciationRate`. Useful-life years are derived UI/helper values only and are not persisted by the accounting API.
+- GraphQL query `fxaOwnerRecords(searchValue, ids, fixedAssetIds, fixedAssetId, categoryId, action, status, ownerId, balanceOnly, createdFrom, createdTo, transactionId, page, perPage, limit)`, returning owner-record ledger rows or fixed asset/owner balance rows when `balanceOnly` is true.
+- GraphQL mutations `fixedAssetOwnerRecordsAdd`, `fixedAssetOwnerRecordsTransfer`, and `fixedAssetOwnerRecordsRemove`, allowing direct responsible-user owner record receive, transfer, cancel, and cleanup operations without creating accounting transactions.
+- GraphQL query `fxaOwnerRecordsCount(searchValue, ids, fixedAssetIds, fixedAssetId, categoryId, action, status, ownerId, balanceOnly, createdFrom, createdTo, transactionId)`, returning the matching owner-record or balance-row count.
+- GraphQL queries `journalReportData` and `journalReportMore`, returning summary and detailed rows for account, trial balance, general-ledger, main-journal, main-journal-summary, fund, debt, inventory-cost, inventory-sale, inventory-sale-cost, inventory-sale-period, inventory-price, inventory-profit, inventory-shipper, inventory-document, inventory-seller-subsystem, and fixed-asset reports with account permission filters, pointer/account/product/fixed-asset/customer/content metadata filters, branch/department child filters, `trKind`/`trKinds`/`getTrKind` filters, detail-level currency/account matching, line-record projection, and group metadata enrichment.
+- Transaction model methods such as `createPTransaction`, `updatePTransaction`, `createTransaction`, `updateTransaction`, and removal helpers used by accounting-owned flows.
+- Inventory split input contract is `details[].followInfos.invSplit` with canonical `hasSplit`; when true, `productId` and a positive `ratio` are required on an `invIncome` or `invMove` source detail, while false disables splitting without validating those fields. Generated `invOut` and `invIncome` rows use `originId` to point to that source transaction. Save normalizes legacy root `followInfos.invSplitDetails` into detail state.
+
+### Consumes
+
+- Core branch, department, customer, company, product, and organization data through `sendTRPCMessage`, GraphQL, HTTP, or shared platform contracts.
+- Shared backend utilities, cursor pagination helpers, pubsub, and service startup APIs from `erxes-api-shared`.
+
+## Data and State
+
+- All Mongoose models are generated per request `subdomain`; never bypass tenant-scoped `models`.
+- Fund adjustments persist in `adjust_fund_rates`; details are grouped by account/branch/department.
+- Debt adjustments persist in `adjust_debt_rates`; details are grouped by account/customer/branch/department.
+- Closing adjustments persist in `adjust_closings`; details are grouped by branch/department and contain temporary account balance rows with editable tax percentages.
+- Rate adjustment calculation stores `status: "process"`, validation period metadata, grouped details, and warning/error state.
+- Rate adjustment transaction execution creates linked `exchangeDiff` parent/child transactions, stores transaction ids on the adjustment/details, and marks status `complete`.
+- Closing calculation stores `status: "process"`, `beginDate`, `successDate`, `checkedAt`, grouped details, `error`, and `warning`; transaction execution creates linked `main` journal parent/child transactions and marks status `complete`.
+- Accounting transaction documents store journal, side, date, status, details, branch/department/customer context, parent transaction linkage, and plugin-specific `extraData`.
+- Inventory transaction details may store an editable `weight` total used as the allocation basis for inventory income expenses.
+- Inventory cost adjustment transaction details keep `count` at zero and store the cost delta in `amount`; adjustment calculation includes those rows in inventory cost while leaving remainder quantity unchanged.
+- Current inventory cost is derived from the latest published adjustment detail for the requested account/product/location plus business-active real-inventory transaction detail movements strictly after the adjustment date; when no published adjustment exists, calculation starts from all business-active movements.
+- Safe remainder items persist backend-derived current total cost separately from imported target total cost, while safe remainder documents retain independent cost-increase and cost-decrease parent transaction ids for redo and undo.
+- Accounting transaction indexes focus on journal, detail account, date-range, and cursor sort paths for transaction lists; journal reports prefilter indexed detail fields before unwind and keep exact detail matching after unwind.
+- Journal reports do not persist state; they aggregate tenant-scoped transaction documents and enrich rows from accounting accounts, fixed assets, and core branch, department, customer, product, user, and synced-content public contracts.
+- Fixed asset category, fixed asset, fixed asset owner record, fixed asset adjustment, inventory remainder, reserve remainder, tax, and accounting setting collections remain owned by this plugin.
+- Fixed asset income transaction detail `followInfos.preDeprecation` stores unit opening accumulated depreciation and drives a paired `fxaDepIn` credit transaction without creating fixed asset adjustment records.
+- Fixed asset income, depreciation calculation inputs, persisted adjustment details, and adjustment GraphQL results use `preDeprecation` as the sole opening accumulated depreciation field name.
+- Fixed asset income transaction detail follow-info owns residual value and `preDeprecation` inputs; `extraData.fxaOwnerRecords` owns only optional responsible-user/serial allocation rows.
+- Income handlers read `preDeprecation` and `salvageValue` only from transaction detail `followInfos`, preserving explicit zero. Missing depreciation is zero; missing residual value falls back only to the category default. Root income-detail metadata is not a financial-input fallback.
+- GraphQL detail input/output uses the existing `followInfos: JSON` contract; `ITrDetailFollowInfos` types known journal metadata and leaves extension keys unknown, without a duplicate root income-detail array.
+- Fixed asset transaction details store `fixedAssetId` for existing assets and store `fixedAssetCategoryId`, `fixedAssetCode`, and `fixedAssetName` for acquisition input; income synchronization writes the generated fixed asset id back to the detail.
+- Fixed asset documents store acquisition identity, account, unit cost, original quantity, current quantity cache, category depreciation defaults, acquisition date, depreciation start date, transaction id, and transaction detail id.
+- Fixed asset owner records store optional responsible-user/serial allocation ledger rows with fixed asset, code, sequence, count, action, status, owner, transaction, and transaction-detail linkage; they must not store branch, department, cost, depreciation method, acquisition date, or financial movement source-of-truth fields.
+- Fixed asset owner records generated from transactions must assign a per-fixed-asset fallback sequence when the source row omits one so legacy databases with a unique `fixedAssetId + sequence` index do not reject multiple unsequenced owner rows.
+
+## Local Invariants
+
+- Tax row filter builders are synchronous; resolver barrels re-export named resolver objects directly while retaining their public aliases. Import payload type checks use `TypeError` with actionable messages.
+
+- Lookup ids and destructive id lists must be required in SDL when the resolver needs them; `graphql/validateRequired.ts` rejects blank ids and empty destructive batches. `accountsEdit` relies on its required SDL id and `getAccount` not-found check before update rather than duplicating single-id validation.
+- Preserve the deprecated `accOddTransactions` query's legacy null response until a separately approved API removal.
+- VAT and CTAX search preserves combined name/number conditions; escape user search text as a literal regex without changing the filter to OR as part of a schema migration.
+- Stored output fields remain nullable unless tenant data and every write path prove a non-null guarantee. Do not use defaults alone to tighten SDL.
+- `accTransactionsLink` consumes `trIds`, not `ids`; transaction creation/update requires a non-empty document batch and update requires a parent id.
+- Every resolver that reads or mutates accounting data must use tenant-scoped `models` and enforce the relevant permission before data access.
+- Transaction list/count/detail queries must intersect requested journals with the user's permitted source journals, including generated follow journals only through their source journal permission; `exchangeDiff` must not have standalone transaction permissions.
+- Transaction detail and content-linked queries must load the whole parent/ptr work transaction when at least one transaction in that group is readable; rows without account-level read access are returned through the hidden transaction shape.
+- Transaction create/update/remove mutations must check the source transaction journals in the submitted or persisted parent transaction before writing or deleting; generated follow journals must not get standalone permissions.
+- Fund/debt rate adjustments are calculated first and executed second; execution must fail when calculated details are missing.
+- Closing adjustments are calculated first and executed second; tax percentages must be saved on detail entries before transaction execution when users edit them.
+- Rate adjustment edits and removals must remove linked generated transactions and reset calculated state.
+- Fund rate adjustment is organization-level; branch/department grouping belongs to details and generated transactions, not the root adjustment.
+- Debt rate adjustment filters customer type only when a concrete customer id is selected; selecting only customer type must not exclude other customers.
+- Exchange-difference transactions must be generated only through accounting journal handlers and must keep parent/detail transaction linkage.
+- Fixed asset income, out, sale, and internal movement handlers must represent accumulated depreciation only through `fxaDepIn`/`fxaDepOut` follow transactions; only explicit Erxes depreciation adjustment workflows may write `AdjustFixedAssets` or `AdjustFxaDetails`.
+- Currency transaction handlers must fail with an explicit missing-rate error instead of calculating NaN.
+- Inventory price lookup must use completed business-active inventory income transactions and default missing product prices to `0`.
+- Current inventory cost lookup must use only the latest published inventory adjustment, must ignore details from older or unpublished adjustments, and must apply post-adjustment business-active debit/credit movements using detail-level branch/department before transaction-level fallback; missing, null, and empty-string locations normalize to `_`, and sale or sale-return edits must exclude their prior generated inventory movement when deriving replacement cost.
+- Inventory cost adjustment journals must not create follow transactions or quantity movement; they only sync product inventory cost deltas and adjust inventory cost caches.
+- Inventory cost adjustment save/remove behavior must remain in `utils/invJustify.ts` as an independent journal handler and must not be implemented as an `invOut` mode.
+- Safe remainder TXT imports and CSV rows without total cost default counted total cost to `active total / preCount * count`; when quantity increases while active total cost is zero, only the increased quantity is valued at the last inventory-income unit price. Explicit imported or edited total cost, including zero, remains authoritative.
+- Safe remainder cost adjustment differences with absolute value at or below `0.005` are accounting rounding noise and must not create `invJustify` details.
+- Safe remainder product discovery must use the category only when no items exist; once items exist, recalculation must filter exclusively by their product ids so imports outside the category remain included without adding new category products.
+- Safe remainder recalculation must preserve an explicitly counted zero and use the same resolved count when deriving a non-explicit counted total cost.
+- Safe remainder bulk import `skip` must leave existing rows unchanged, while `add` must sum both counts and complete explicit total costs; every import must refresh imported products through the normal recalculation path.
+- Partial safe remainder updates must preserve omitted description, status, rules, and transaction ids; an explicit empty transaction id may still clear that link.
+- Inventory out and internal movement transaction details must always persist active cost for their source account and effective detail/root location, excluding the old source and generated movement transactions during edits; client-supplied cost values are not authoritative.
+- Inventory split follow transactions must remain cost-neutral: the split `invOut` removes the received source quantity at its total line cost, the split `invIncome` receives `source count * ratio`, and its unit price equals total line cost divided by that converted quantity; internal-movement splits use the destination account, branch, and department.
+- Inventory split synchronization must preserve generated detail ids by source `originId`, remove duplicate generated transactions with inventory reversal, and fail when an enabled source split cannot map to its income-side detail.
+- Deal movement sync must resolve product-row `branchId`/`departmentId` first, then deal-level branch/department, then configured defaults; when the deal location side is destination, source details use default source location and generated `invMoveIn` details use deal/product location, and vice versa for source-side configs. It must cost source details from active inventory cost for the configured source account and effective source location, excluding the existing synced movement during resync.
+- Deal and POS order sale sync must preserve sale journal validation. Missing payment, receivable, or cash/bank account configuration skips only those payment rows; actual paid amounts must be deducted before checking account configuration, and the sync must not invent balancing rows solely to force `ptrStatus: ok`.
+- Safe remainder item `preCount` must return `0` and `diffType` filters must be ignored for users without `viewSafeRemainderItemCounts` so they cannot compare the system inventory balance with counted inventory.
+- Inventory adjustment outgoing-cost fixes may adjust only related debit transactions in `main`, `receivable`, and `payable` journals; cash and bank debit amounts are explicit payment amounts and must not be rewritten by cost recalculation.
+- Inventory adjustment grouping must use detail-level branch/department when present and fall back to transaction root branch/department so mixed-location transaction rows cost against the correct location.
+- Journal report filters that target transaction details must be applied after `$unwind` so unrelated detail rows from the same transaction are not included in report sums.
+- Journal report detail lookup is enabled by default for every registered report base; `supportsMore: false` is the only opt-out, pointer drill-down must match either `ptrId` or the fallback `parentId` used by report grouping, and expanded transaction rows must remain inside the selected `fromDate` and `toDate` even when summary opening balances include earlier activity.
+- Source inventory and fixed-asset location filters map to branch/department filters; report matching must accept either transaction root branch/department or detail-level branch/department while keeping selected dimensions combined with AND semantics.
+- Source transaction-kind filters are adapter inputs only; report aggregation must translate them to current transaction `journal` values instead of adding a separate persisted transaction-kind field.
+- Inventory adjustment kind `28` must map only to `invJustify`, never quantity-changing `invIncome` or `invOut`; report rows preserve transaction side so debit adjustments increase cost and credit adjustments decrease cost.
+- Opening income depreciation uses a linked `fxaDepIn` follow dated one day before acquisition; income synchronization must not create system opening adjustment records.
+- Fixed asset income removal must ignore follow transactions generated by the same income transaction, including `fxaDepIn`, while still blocking removal when unrelated transactions use the fixed asset.
+- Income deletion and removal of income details from edits must check both owned master ids and the selected details' referenced asset ids, even when another income owns the master. Validation-only removal must never mutate masters, owner records, or follow transactions. Group deletion and removal of income journals during group edits run independent read-only preflight checks together and await all affected incomes before writing any cleanup; destructive cleanup stays sequential.
+- Transaction models own create/update/remove batch iteration. Before any group writes, they finish the per-row `commonSaveValidation` and/or `commonRemoveValidation` phase; then their existing `commonSave`/`commonRemove` loops run sequentially. Common validators dispatch only explicitly registered journal validators and return without checks for unregistered journals. FXA income save validation checks removed detail references; its remove validation checks the whole income. Journal-specific rules never belong in the model, and all four common entry points accept only individual transactions.
+- Fixed asset follow transactions (`fxaDepIn`, `fxaDepOut`, `fxaMoveIn`, `fxaSaleOut`, `fxaSaleCost`) must be created, updated, and removed from the fixed asset journal handlers; `fxaSale` follow accounts use `saleOutAccountId` and `saleCostAccountId`, while `fxaOut` must not require sale-only accounts; `commonRemove` owns cleanup so generated rows do not depend only on outer transaction deletion.
+- Generated fixed asset income, out, and move follow transactions must inherit the root transaction's `ptrId`; fixed asset sale follows (`fxaSaleOut`, `fxaDepOut`, and `fxaSaleCost`) share a separate cost pointer from the revenue-side `fxaSale` pointer, matching inventory sale accounting.
+- Fixed asset income explicit owner-record counts must not exceed the parent detail count for that detail; partially owner-assigned income quantities are valid and details without owner rows create no owner record unless transaction-level `followInfos.ownerId` is present.
+- Fixed asset income code is the acquisition identity; opening balances may split one acquisition across several branch/department details, but those details must resolve to one fixed asset master row and separate owner-record rows.
+- Fixed asset disposal, sale, and move owner-record selections are optional, and selected counts are capped by the detail count instead of being required to exhaust it; saving removes prior owner-record rows for that transaction and writes fresh `handedOver` rows, while move writes a matching `received` row for the owner so owner balance remains net neutral.
+- Fixed asset disposal, sale, and move quantities must come from transaction details; branch and department belong to each detail and mixed locations require multiple details.
+- Fixed asset move source details must be paired with generated `fxaMoveIn` destination details, and any accumulated depreciation must be paired as source debit plus destination credit follow transactions so period/location reporting is derived from transaction history, not owner records; move destinations may be branch-only, department-only, or branch plus department.
+- Fixed asset depreciation must be calculated once per fixed asset acquisition cost base and allocated across branch/department locations by active quantity for each day.
+- Fixed asset adjustment starts from that asset's previous adjustment closing depreciation, or zero when no snapshot exists, then applies business-active depreciation ledger credits/debits after the snapshot by calendar day. Income `fxaDepIn` opening entries are included; expense accounts and the current adjustment's own postings are excluded. Disposal/movement debit entries remove depreciation exactly once, without an additional quantity-based reduction; zero-balance departed locations retain period expense without duplicating closing balances. The calculation does not rewrite source ledger postings; inconsistent daily accumulated balances produce an actionable detail error.
+- Straight-line fixed asset depreciation must use annual depreciation percentage as the source of truth: annual rate / 12 gives monthly depreciation, and each day receives that month's daily prorated amount.
+- Fixed asset disposal and sale summaries must use the latest completed or published fixed asset adjustment on or before the disposal transaction date; future, draft, running, or process adjustment details must not affect book value.
+- Fixed asset current quantity cache must be rebuilt from business-active fixed asset income, out, sale, move, and move-in transaction details.
+- Fixed asset location remainder must be calculated from business-active fixed asset transaction details and must exclude the current edited transaction's entire parent workflow so sibling root and generated movement rows do not reduce its available quantity during validation.
+- Single fixed asset location remainder and grouped remainder list queries must share the same movement sign, branch, department, and positive-balance aggregation behavior.
+- Automatic fixed asset adjustment calculation supports every fixed asset depreciation method except `manual`; `manual` must fail validation until an entered-depreciation detail flow exists.
+
+## Validation
+
+- `pnpm nx run accounting_api:schema:print --skip-nx-cache` prints this subgraph offline for `gateway:schema:compose`.
+- `pnpm nx lint accounting_api`
+- `pnpm nx build accounting_api`
+- `pnpm nx test accounting_api`
+- `node_modules/.bin/tsc -p backend/plugins/accounting_api/tsconfig.build.json --noEmit`
+- Smoke scenario: open accounting transaction export, select default fields, export with journal/date/search filters, and verify the generated CSV contains only matching transaction detail rows.
+- Contract tests build the subgraph with runtime resolvers and require parity for every Query/Mutation root field; do not advertise fields without implementations.
+- Smoke scenario: calculate a fund and debt rate adjustment, verify validation fields/details are stored, then run transactions and confirm linked `exchangeDiff` transactions are created.
+- Smoke scenario: calculate a closing adjustment, edit a detail entry tax percent, run transactions, and verify `taxImpactValue`, grouped details, and linked transaction ids are stored.
+- Smoke scenario: run `journalReportData` and `journalReportMore` for every registered report with account/category/currency, `trKind`, pointer, customer/product/fixed-asset/user/content grouping, and branch/department grouping filters, then verify grouped totals and detail rows match every selected hierarchy value.
+- Smoke scenario: recalculate a safe remainder and test equal, higher, and lower counted quantities; verify income absorbs positive target-value differences, negative income is zero with a capped decrease adjustment, out/sale uses active cost, and remaining increases/decreases create balanced `invJustify` parents after quantity transactions.
+- Smoke scenario: create and edit inventory income plus internal movement with five details and enable `details[].followInfos.invSplit` on three; verify exactly one linked three-detail `invOut` and one linked three-detail `invIncome` share a pointer different from the source transaction, total cost is unchanged, converted quantity/unit price follow the ratio, and removing the source reverses both inventory effects.
+- Smoke scenario: configure deal movement sync for a stage, choose inventory source/destination accounts, default source/destination branch/department, and source vs destination deal-location side; move a deal with product rows into that stage and verify the generated `invMove` and `invMoveIn` rows keep the configured side defaults plus product/deal branch and department on the selected side, and use active cost rather than the deal product sale price.
