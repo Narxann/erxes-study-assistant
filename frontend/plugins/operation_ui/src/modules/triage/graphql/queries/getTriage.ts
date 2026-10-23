@@ -1,0 +1,21 @@
+import { gql } from '~/gql';
+
+export const GET_TRIAGE = gql(`
+  query operationGetTriage($_id: String!) {
+    operationGetTriage(_id: $_id) {
+      _id
+      name
+      description
+      teamId
+      createdBy
+      number
+      createdAt
+      updatedAt
+      priority
+      status
+      githubIssueNumber
+      githubIssueUrl
+      githubRepoName
+    }
+  }
+`);

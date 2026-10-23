@@ -1,0 +1,121 @@
+import { useConversationDetail } from '@/inbox/conversations/conversation-detail/hooks/useConversationDetail';
+import { AddTicketSheet } from '@/ticket/components/add-ticket/AddTicketSheet';
+import { ticketCreateDefaultValuesState } from '@/ticket/states/ticketCreateSheetState';
+import { IconTicketOff } from '@tabler/icons-react';
+import { ScrollArea, Separator, useQueryState } from 'erxes-ui';
+import { useSetAtom } from 'jotai';
+import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  IRelationWidgetProps,
+  useCreateMultipleRelations,
+  useRelations,
+} from 'ui-modules';
+import { TicketWidget } from './TicketWidget';
+
+export const TicketRelationWidget = ({
+  contentId,
+  contentType,
+  customerId,
+  companyId,
+}: IRelationWidgetProps) => {
+  const { t } = useTranslation('frontline');
+  const { ownEntities } = useRelations({
+    variables: {
+      contentId,
+      contentType,
+      relatedContentType: 'frontline:ticket',
+    },
+  });
+
+  const { createMultipleRelations } = useCreateMultipleRelations();
+
+  const onComplete = (ticketId: string) => {
+    const createRelation = (ct: string, cid: string) => ({
+      entities: [
+        { contentType: ct, contentId: cid },
+        { contentType: 'frontline:ticket', contentId: ticketId },
+      ],
+    });
+
+    const relationKeys = new Set<string>();
+
+    const relations = [
+      [contentType, contentId],
+      ...(customerId ? [['core:customer', customerId]] : []),
+      ...(companyId ? [['core:company', companyId]] : []),
+    ]
+      .filter(([ct, cid]) => {
+        const key = `${ct}:${cid}`;
+        if (relationKeys.has(key)) {
+          return false;
+        }
+        relationKeys.add(key);
+        return true;
+      })
+      .map(([ct, cid]) => createRelation(ct, cid));
+
+    createMultipleRelations(relations);
+  };
+
+  const setTicketCreateDefaultValues = useSetAtom(
+    ticketCreateDefaultValuesState,
+  );
+  const [conversationId] = useQueryState<string | null>('conversationId');
+
+  const { conversationDetail } = useConversationDetail({
+    variables: {
+      _id: conversationId || '',
+    },
+    skip: !conversationId,
+  });
+
+  useEffect(() => {
+    if (!conversationDetail?.integration?.channelId) return;
+    setTicketCreateDefaultValues({
+      channelId: conversationDetail?.integration.channelId || undefined,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationDetail]);
+
+  if (ownEntities?.length === 0) {
+    return (
+      <div className="flex flex-auto flex-col gap-4 justify-center items-center text-muted-foreground">
+        <div className="border border-dashed p-6 bg-background rounded-xl">
+          <IconTicketOff />
+        </div>
+        <span className="text-sm">
+          {t('no-tickets-to-display', 'No tickets to display at the moment.')}
+        </span>
+        <AddTicketSheet
+          onComplete={onComplete}
+          variant="secondary"
+          isRelation={true}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="h-11 px-4 flex items-center gap-2 flex-none bg-background justify-between">
+        <span className="font-medium text-primary">
+          {t('tickets', 'Tickets')}
+        </span>
+        <AddTicketSheet
+          onComplete={onComplete}
+          variant="secondary"
+          isRelation={true}
+        />
+      </div>
+      <Separator />
+      <ScrollArea className="flex-auto">
+        <div className="flex flex-col gap-4 p-4">
+          {ownEntities?.map((entity) => (
+            <TicketWidget key={entity.contentId} ticketId={entity.contentId} />
+          ))}
+        </div>
+      </ScrollArea>
+    </>
+  );
+};
