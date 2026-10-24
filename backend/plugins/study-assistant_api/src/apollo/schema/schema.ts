@@ -5,6 +5,33 @@ import {
 } from '@/problems/graphql/schemas/problems';
 
 export const types = `
+  type StudyAssistantSolution {
+    source: String!
+    recognized: String!
+    topic: String!
+    answer: String!
+    hint: String!
+    concept: String!
+    steps: [String!]!
+    practice: String!
+    confidence: Float!
+  }
+
+  type StudyAssistantLearningAttempt {
+    _id: String!
+    grade: Int!
+    problem: String!
+    imageReference: String
+    recognized: String
+    topic: String
+    answer: String
+    steps: [String!]!
+    hint: String
+    practice: String
+    source: String!
+    createdAt: Date
+  }
+
   ${ProblemsTypes}
 
   type StudyAssistantCheckResult {
@@ -12,14 +39,25 @@ export const types = `
     firstErrorStep: Int
     expectedAnswer: Float
     explanation: String!
+    errorType: String
+    errorTitle: String
+    correction: String
+    nextExercise: String
   }
 `;
 
 export const queries = `
+  studyAssistantLearningAttempts(grade: Int): [StudyAssistantLearningAttempt!]!
   ${ProblemsQueries}
 `;
 
 export const mutations = `
+  studyAssistantSolve(
+    grade: Int!
+    problem: String
+    imageData: String
+    imageReference: String
+  ): StudyAssistantSolution!
   ${ProblemsMutations}
 
   studyAssistantCheckSolution(
