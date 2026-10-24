@@ -23,6 +23,14 @@ export const config: ModuleFederationConfig = {
 
   shared: (libraryName, defaultConfig) => {
     if (coreLibraries.has(libraryName)) {
+      if (libraryName === 'react' || libraryName === 'react-dom') {
+        return {
+          ...defaultConfig,
+          singleton: true,
+          requiredVersion: false,
+        };
+      }
+
       return defaultConfig;
     }
 

@@ -25,8 +25,9 @@
 
 - Exposes `studyAssistantSolve` and `studyAssistantLearningAttempts`.
 - Exposes `studyAssistantCheckSolution`.
-- Returns structured Error Detective metadata: error type, title, correction, and next exercise.
-- Parses supported linear expressions and compares each submitted step with the expected solution.
+- Returns structured Error Detective metadata: error type, title, explanation, correction, corrected next step, and next exercise.
+- Parses supported one-variable linear expressions and identifies the first mathematically invalid submitted step; unsupported input is reported without guessing.
+- Provides a shared safe math foundation for exact rational fraction expressions, linear inequalities, and quadratic equations/functions, including quadratic graph data.
 - Calls Gemini through a backend-only `GEMINI_API_KEY` when configured and falls back to a safe demo response.
 - Starts as an isolated plugin on port `3306`.
 
@@ -37,7 +38,8 @@
 | GraphQL | `src/apollo` | Schema and resolver registration |
 | Learning | `src/learning.ts` | Gemini request, structured solution parsing, and fallback |
 | Attempts | `src/modules/learning` | Tenant-scoped persisted solve history |
-| Validation | `src/trpc/check-solution.ts` | Linear equation parser and step checker |
+| Validation | `src/trpc/check-solution.ts` | Backward-compatible dispatcher and linear step checker |
+| Math engine | `src/trpc/math-engine.ts` | Safe normalization, rational/polynomial parsing, fraction/inequality/quadratic evaluation |
 | Runtime | `src/main.ts` | Plugin startup and tenant model context |
 
 ## Contracts
@@ -64,8 +66,11 @@
 - The parser must not evaluate arbitrary code.
 - Provider failures return the demo fallback rather than exposing provider credentials or raw upstream errors.
 - Step checking remains deterministic; structured error metadata is safe to render directly in the learning UI.
+- Unsupported topics and ambiguous expressions remain unverified; no LLM response is used as mathematical truth.
 
 ## Validation
 
 - `pnpm nx lint study-assistant_api`
 - `pnpm nx build study-assistant_api`
+- `pnpm exec tsx src/trpc/check-solution.spec.ts` (31 deterministic stress tests)
+- `pnpm exec tsx src/trpc/math-engine.spec.ts` (113 Grade 5/8/11 regression tests)

@@ -14,6 +14,7 @@ export const learningAttemptSchema = schemaWrapper(
       steps: { type: [String], default: [] },
       hint: { type: String },
       practice: { type: String },
+      practiceAnswer: { type: String },
       source: { type: String, enum: ['gemini', 'demo'], required: true },
     },
     { timestamps: true },

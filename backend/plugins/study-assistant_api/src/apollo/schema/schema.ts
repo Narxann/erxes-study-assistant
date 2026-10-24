@@ -14,6 +14,7 @@ export const types = `
     concept: String!
     steps: [String!]!
     practice: String!
+    practiceAnswer: String!
     confidence: Float!
   }
 
@@ -28,6 +29,7 @@ export const types = `
     steps: [String!]!
     hint: String
     practice: String
+    practiceAnswer: String
     source: String!
     createdAt: Date
   }
@@ -42,6 +44,7 @@ export const types = `
     errorType: String
     errorTitle: String
     correction: String
+    correctedStep: String
     nextExercise: String
   }
 `;

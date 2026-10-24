@@ -10,6 +10,7 @@ export interface ILearningAttempt {
   steps?: string[];
   hint?: string;
   practice?: string;
+  practiceAnswer?: string;
   source: 'gemini' | 'demo';
 }
 
