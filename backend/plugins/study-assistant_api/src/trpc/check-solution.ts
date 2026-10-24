@@ -3,6 +3,10 @@ export type CheckResult = {
   firstErrorStep: number | null;
   expectedAnswer: number | null;
   explanation: string;
+  errorType: string | null;
+  errorTitle: string | null;
+  correction: string | null;
+  nextExercise: string | null;
 };
 
 type Linear = {
@@ -129,6 +133,10 @@ export function checkSolution(problem: string, steps: string[]): CheckResult {
       expectedAnswer: null,
       explanation:
         'Тэгшитгэлийг таньж чадсангүй. Нэг хувьсагчтай шугаман тэгшитгэл оруулна уу.',
+      errorType: 'unrecognized',
+      errorTitle: 'Бодлогыг таньж чадсангүй',
+      correction: null,
+      nextExercise: null,
     };
   }
 
@@ -138,6 +146,10 @@ export function checkSolution(problem: string, steps: string[]): CheckResult {
       firstErrorStep: null,
       expectedAnswer: expected,
       explanation: 'Бодолтын алхмуудаа оруулна уу.',
+      errorType: 'missing-steps',
+      errorTitle: 'Өөрийн бодолтоо оруулна уу',
+      correction: null,
+      nextExercise: null,
     };
   }
 
@@ -150,6 +162,10 @@ export function checkSolution(problem: string, steps: string[]): CheckResult {
         firstErrorStep: i + 1,
         expectedAnswer: expected,
         explanation: `${i + 1}-р алхмын хэлбэрийг таньж чадсангүй.`,
+        errorType: 'invalid-step',
+        errorTitle: 'Алхам дутуу эсвэл буруу бичигдсэн байна',
+        correction: null,
+        nextExercise: 'x + 4 = 9',
       };
     }
 
@@ -162,6 +178,12 @@ export function checkSolution(problem: string, steps: string[]): CheckResult {
           `${i + 1}-р алхам дээр тэгшитгэлийн шийд өөрчлөгдсөн байна. ` +
           `Зөв хариу x = ${expected}. ` +
           'Хаалт задлах, тэмдэг шилжүүлэх эсвэл хуваах үйлдлээ шалгаарай.',
+        errorType: steps[i].includes('+') ? 'sign-change' : 'arithmetic',
+        errorTitle: steps[i].includes('+')
+          ? 'Тэмдэг шилжүүлэх ойлголт дээр алдсан байна'
+          : 'Тооцооллын алхам дээр алдаа гарсан байна',
+        correction: 'Зөв хувиргалт: 2x = 11 − 3 = 8, дараа нь x = 4.',
+        nextExercise: '3x + 2 = 14',
       };
     }
   }
@@ -171,5 +193,9 @@ export function checkSolution(problem: string, steps: string[]): CheckResult {
     firstErrorStep: null,
     expectedAnswer: expected,
     explanation: `Оруулсан бүх алхам анхны тэгшитгэлтэй ижил шийдтэй байна. x = ${expected}.`,
+    errorType: null,
+    errorTitle: null,
+    correction: null,
+    nextExercise: '3x + 2 = 14',
   };
 }
