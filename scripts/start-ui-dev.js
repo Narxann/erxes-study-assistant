@@ -2,7 +2,7 @@
 require('dotenv').config();
 
 const { ENABLED_PLUGINS } = process.env;
-const { execSync, spawn } = require('child_process');
+const { execSync, execFileSync, spawn } = require('child_process');
 const { existsSync, readFileSync } = require('fs');
 const path = require('path');
 
@@ -44,7 +44,9 @@ if (ENABLED_PLUGINS) {
 let watcher;
 if (codegenRemotes.length) {
   const projects = codegenRemotes.join(',');
-  execSync(`nx run-many -t codegen -p ${projects}`, { stdio: 'inherit' });
+  execFileSync('nx', ['run-many', '-t', 'codegen', '-p', projects], {
+    stdio: 'inherit',
+  });
   watcher = spawn(
     'npx',
     [

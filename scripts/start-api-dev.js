@@ -3,7 +3,7 @@ require('dotenv').config();
 
 const { ENABLED_PLUGINS, ENABLED_SERVICES, ENABLED_PLUGINS_ONLY_API } =
   process.env;
-const { execSync } = require('child_process');
+const { spawn } = require('child_process');
 const { existsSync } = require('fs');
 const path = require('path');
 
@@ -65,4 +65,12 @@ const command = `npx nx run-many -t serve -p core-api ${totalProjects} gateway -
   projectsCount,
 )}`;
 console.log(`Running: ${command}`);
-execSync(command, { stdio: 'inherit' });
+const child = spawn(command, { shell: true, stdio: 'inherit' });
+
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.once(signal, () => child.kill(signal));
+}
+
+child.once('exit', (code, signal) => {
+  process.exitCode = code ?? (signal ? 1 : 0);
+});
